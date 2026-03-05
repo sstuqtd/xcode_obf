@@ -42,6 +42,8 @@ def extract_strings_from_binary(file_path: str, min_length: int = 4) -> list[str
             ["strings", "-n", str(min_length), file_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
         if result.returncode == 0:
@@ -58,6 +60,8 @@ def convert_plist_to_readable(plist_path: str) -> str:
             ["plutil", "-convert", "xml1", "-o", "-", plist_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         if result.returncode == 0:
