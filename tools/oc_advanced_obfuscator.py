@@ -77,8 +77,28 @@ def _extract_used_identifiers_oc(block: str) -> set[str]:
     return ids
 
 
+def _braces_balanced(text: str) -> bool:
+    """检查大括号是否匹配（忽略字符串内）"""
+    depth = 0
+    i = 0
+    while i < len(text):
+        if text[i] in '"\'':
+            quote = text[i]
+            i += 1
+            while i < len(text) and (text[i] != quote or text[i - 1] == "\\"):
+                i += 1
+        elif text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+        i += 1
+    return depth == 0
+
+
 def split_body_into_blocks_oc(body: str, num_parts: int) -> list[str]:
-    """OC 方法体拆分，检测变量依赖，有依赖则合并以保持执行结果不变"""
+    """OC 方法体拆分，检测变量依赖与大括号完整性，有依赖或未闭合则合并"""
     paragraphs = re.split(r"\n\s*\n", body)
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
@@ -96,9 +116,22 @@ def split_body_into_blocks_oc(body: str, num_parts: int) -> list[str]:
             merged.append(para)
         declared_so_far |= _extract_declared_vars_oc(para)
 
-    if len(merged) >= num_parts:
-        return merged[:num_parts]
-    return merged
+    # 确保每个块大括号匹配，不匹配的块合并到前一块
+    valid = []
+    for block in merged:
+        if _braces_balanced(block):
+            valid.append(block)
+        elif valid:
+            valid[-1] = valid[-1] + "\n\n" + block
+        else:
+            valid.append(block)
+    # 再次检查：若首块仍不匹配，尝试与后续合并
+    while len(valid) > 1 and not _braces_balanced(valid[0]):
+        valid[0] = valid[0] + "\n\n" + valid.pop(1)
+
+    if len(valid) >= num_parts:
+        return valid[:num_parts]
+    return valid
 
 
 def _format_block(block: str) -> str:

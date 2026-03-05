@@ -12,6 +12,8 @@
 | `method_splitter.py` | 将长方法拆分为 2-5 个小方法（Swift） |
 | `oc_advanced_obfuscator.py` | OC 高级混淆：方法拆分、代码格式化 |
 | `unity_obfuscate.py` | Unity 导出 Xcode 工程自动混淆 |
+| `string_encrypt.py` | 字符串自动加密/解密 |
+| `data_encrypt.py` | Data/Raw 文件加密/解密 |
 | `obfuscate.py` | 统一 CLI 入口 |
 | `xcode_run_script.sh` | Xcode Build Phase 集成脚本 |
 
@@ -82,11 +84,14 @@ python3 method_splitter.py MyViewController.swift --min-lines 10 --parts 3-5 --d
 
 ### 5. Unity 导出 Xcode 工程自动混淆
 
-针对 Unity 2020.3+ 导出的 Xcode 工程，自动执行 Plist、OC 方法拆分等混淆。**使用时机**：Unity 导出后、Xcode 构建前。
+针对 Unity 2020.3+ 导出的 Xcode 工程，自动执行 Plist、OC 方法拆分、字符串加密、Data/Raw 加密等。**使用时机**：Unity 导出后、Xcode 构建前。**默认直接修改原工程文件**。
 
 ```bash
-# 对 Unity 工程目录执行（自动查找 .xcodeproj）
+# 基础混淆（Plist + OC 方法拆分）
 python3 unity_obfuscate.py /path/to/Unity-iPhone
+
+# 启用字符串加密、Data/Raw 加密（需将生成的 ObfuscatedStrings、DecryptedDataLoader 加入 Xcode）
+python3 unity_obfuscate.py . --str-encrypt --data-encrypt
 
 # 仅 Plist
 python3 unity_obfuscate.py . --no-objc
@@ -94,6 +99,8 @@ python3 unity_obfuscate.py . --no-objc
 # 预览
 python3 unity_obfuscate.py . --dry-run
 ```
+
+**注意**：SplashScreen、UnityAppController、main 等 Unity 核心文件会跳过 OC 方法拆分，避免 `#if`、多 `@implementation` 导致语法错误。
 
 ### 6. OC 高级混淆
 
@@ -118,7 +125,44 @@ python3 obfuscate.py oc ViewController.m --format
 python3 obfuscate.py unity /path/to/Unity-iPhone
 ```
 
-### 8. Xcode 集成
+### 8. 字符串自动加密/解密
+
+扫描源文件中的字符串字面量，自动加密并生成运行时解密代码。**默认直接修改原工程文件**。
+
+```bash
+# 加密 Classes/ 下所有 .m/.mm 中的字符串（直接修改原文件）
+python3 string_encrypt.py Classes/
+
+# 指定解密器输出路径
+python3 string_encrypt.py Classes/ --decoder-output ObfuscatedStrings
+
+# 预览（不写入）
+python3 string_encrypt.py MyFile.m --dry-run
+```
+
+需将生成的 `ObfuscatedStrings.h`、`ObfuscatedStrings.m` 加入 Xcode 工程。
+
+### 9. Data/Raw 文件加密/解密
+
+加密 Data/Raw 下的资源文件，运行时通过加载器解密。**默认直接修改原工程文件**。
+
+```bash
+# 加密（直接修改 Data/Raw 下原文件）
+python3 data_encrypt.py encrypt Data/Raw --key-out key.bin
+
+# 加密到新目录（保留原文件）
+python3 data_encrypt.py encrypt Data/Raw -o Data/Raw.enc --key-out key.bin
+
+# 生成 ObjC 加载器（需传入相同密钥，可用 key.bin.hex）
+python3 data_encrypt.py gen-loader --key $(cat key.bin.hex) -o DecryptedDataLoader.m
+
+# 解密（测试用）
+python3 data_encrypt.py decrypt Data/Raw.enc -o Data/Raw.dec --key <hex_key>
+```
+
+运行时使用 `DecryptedDataFromBundle(@"path/to/file")` 加载解密后的 Data。
+
+### 10. Xcode 集成
 
 将 `xcode_run_script.sh` 中的 `TOOLS_DIR` 改为本仓库 `tools` 目录路径，然后在 Xcode Build Phases 中添加 Run Script 执行该脚本。建议仅在 Release 配置下启用。
 

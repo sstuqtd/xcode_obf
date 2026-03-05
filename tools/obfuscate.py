@@ -48,6 +48,18 @@ def cmd_unity(args):
     unity_main()
 
 
+def cmd_string_encrypt(args):
+    from string_encrypt import main as encrypt_main
+    sys.argv = ["string_encrypt"] + args.extra
+    encrypt_main()
+
+
+def cmd_data_encrypt(args):
+    from data_encrypt import main as data_main
+    sys.argv = ["data_encrypt"] + args.extra
+    data_main()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="IPA 相似度降低工具集（参考 降低IPA相似度指南.md）",
@@ -60,6 +72,8 @@ def main():
   split     将长方法拆分为 2-5 个小方法（Swift）
   oc        OC 高级混淆：方法拆分、代码格式化（Objective-C）
   unity     Unity 导出 Xcode 工程自动混淆
+  str-enc  字符串自动加密/解密
+  data-enc Data/Raw 文件加密/解密
 
 示例:
   python3 obfuscate.py plist path/to/Info.plist
@@ -68,14 +82,20 @@ def main():
   python3 obfuscate.py split MyViewController.swift -o MyViewController.swift
   python3 obfuscate.py oc ViewController.m --format --parts 3-5
   python3 obfuscate.py unity /path/to/Unity-iPhone
+  python3 obfuscate.py str-enc Classes/
+  python3 obfuscate.py data-enc encrypt Data/Raw -o Data/Raw.enc
         """,
     )
-    parser.add_argument("cmd", choices=["plist", "strings", "literal", "split", "oc", "unity"], help="子命令")
+    parser.add_argument("cmd", choices=["plist", "strings", "literal", "split", "oc", "unity", "str-enc", "data-enc"], help="子命令")
     parser.add_argument("extra", nargs=argparse.REMAINDER, help="传递给子命令的参数")
 
     args = parser.parse_args()
 
-    handlers = {"plist": cmd_plist, "strings": cmd_strings, "literal": cmd_literal, "split": cmd_split, "oc": cmd_oc, "unity": cmd_unity}
+    handlers = {
+        "plist": cmd_plist, "strings": cmd_strings, "literal": cmd_literal,
+        "split": cmd_split, "oc": cmd_oc, "unity": cmd_unity,
+        "str-enc": cmd_string_encrypt, "data-enc": cmd_data_encrypt,
+    }
     if args.cmd in handlers:
         handlers[args.cmd](args)
     else:
