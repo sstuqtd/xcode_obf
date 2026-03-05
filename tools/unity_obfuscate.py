@@ -53,8 +53,8 @@ def collect_unity_project_files(project_root: Path) -> dict:
         for f in project_root.rglob(ext):
             if "Pods" in str(f) or "DerivedData" in str(f):
                 continue
-            # 跳过第三方/系统生成的大文件（可选）
-            if f.stat().st_size > 2 * 1024 * 1024:  # 跳过 >2MB
+            # 跳过超大文件（>10MB，多为生成代码，拆分收益低）
+            if f.stat().st_size > 10 * 1024 * 1024:
                 continue
             files["objc"].append(f)
 
@@ -78,10 +78,16 @@ def run_obfuscation(
     parts: str = "2-5",
     format_code: bool = False,
     dry_run: bool = False,
+    verbose: bool = False,
 ) -> dict[str, int]:
     """执行混淆，返回各类型处理数量"""
     counts = {"plist": 0, "objc": 0, "strings": 0}
     files = collect_unity_project_files(project_root)
+
+    if verbose:
+        print(f"扫描到: Plist={len(files['plist'])}, OC={len(files['objc'])}, Strings={len(files['strings'])}")
+        for f in files["objc"]:
+            print(f"  OC: {f.relative_to(project_root)}")
 
     # 1. Plist 混淆
     if plist and files["plist"]:
@@ -176,6 +182,7 @@ def main():
     parser.add_argument("--parts", default="2-5", help="OC 拆分数量范围")
     parser.add_argument("--format", action="store_true", help="OC 代码格式化")
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不写入")
+    parser.add_argument("-v", "--verbose", action="store_true", help="显示扫描到的文件列表")
 
     args = parser.parse_args()
 
@@ -192,9 +199,11 @@ def main():
             parts=args.parts,
             format_code=args.format,
             dry_run=args.dry_run,
+            verbose=args.verbose,
         )
 
-        print(f"处理完成: Plist={counts['plist']}, OC={counts['objc']}, Strings={counts['strings']}")
+        total_oc = len(files["objc"])
+        print(f"处理完成: Plist={counts['plist']}/{len(files['plist'])}, OC={counts['objc']}/{total_oc}, Strings={counts['strings']}/{len(files['strings'])}")
         if args.dry_run:
             print("(dry-run，未写入)")
     except FileNotFoundError as e:
