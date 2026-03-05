@@ -3,6 +3,7 @@
 Unity 导出 Xcode 工程自动混淆
 针对 Unity 2020.3+ 导出的 Xcode 工程，自动执行：
 - Plist 混淆、Localizable.strings 混淆
+- OC 方法拆分（Clang AST，对整个工程）
 - 字符串自动加密/解密
 - Data/Raw 文件加密/解密
 
@@ -117,14 +118,23 @@ def collect_unity_project_files(project_root: Path) -> dict:
     """
     files = {
         "plist": [],
+        "objc": [],
         "strings": [],
     }
 
-    # Info.plist：主工程、MainApp、UnityFramework 等
+    # Info.plist
     for plist in project_root.rglob("Info.plist"):
         if "Pods" in str(plist) or "DerivedData" in str(plist):
             continue
         files["plist"].append(plist)
+
+    # Objective-C：.m, .mm
+    for ext in ("*.m", "*.mm"):
+        for f in project_root.rglob(ext):
+            if "Pods" in str(f) or "DerivedData" in str(f):
+                continue
+            if f.stat().st_size < 10 * 1024 * 1024:
+                files["objc"].append(f)
 
     # Localizable.strings
     for f in project_root.rglob("*.strings"):
@@ -136,22 +146,48 @@ def collect_unity_project_files(project_root: Path) -> dict:
     return files
 
 
+def _run_oc_ast_split(project_root: Path, files: dict, dry_run: bool, min_stmts: int) -> int:
+    """对整个 Unity Xcode 工程执行 Clang AST 方法拆分"""
+    count = 0
+    for oc_path in files.get("objc", []):
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOLS_DIR / "oc_ast_splitter.py"),
+                    str(oc_path),
+                    "-o", str(oc_path),
+                    "--min-stmts", str(min_stmts),
+                ] + (["--dry-run"] if dry_run else []),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0 and "已拆分" in (result.stdout or ""):
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
 def run_obfuscation(
     project_root: Path,
     *,
     plist: bool = True,
+    oc_ast: bool = False,
     strings: bool = False,
     str_encrypt: bool = False,
     data_encrypt: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
+    min_stmts: int = 5,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """执行混淆，返回 (counts, totals)"""
-    counts = {"plist": 0, "strings": 0, "str_encrypt": 0, "data_encrypt": 0}
+    counts = {"plist": 0, "oc_ast": 0, "strings": 0, "str_encrypt": 0, "data_encrypt": 0}
     files = collect_unity_project_files(project_root)
 
     if verbose:
-        print(f"扫描到: Plist={len(files['plist'])}, Strings={len(files['strings'])}")
+        print(f"扫描到: Plist={len(files['plist'])}, OC={len(files['objc'])}, Strings={len(files['strings'])}")
 
     # 1. Plist 混淆
     if plist and files["plist"]:
@@ -174,7 +210,11 @@ def run_obfuscation(
             except Exception:
                 pass
 
-    # 2. Localizable.strings 混淆（可选，会改变键名需运行时映射）
+    # 2. OC 方法拆分（Clang AST，对整个工程，需 pip install libclang）
+    if oc_ast and files["objc"]:
+        counts["oc_ast"] = _run_oc_ast_split(project_root, files, dry_run, min_stmts)
+
+    # 3. Localizable.strings 混淆（可选，会改变键名需运行时映射）
     if strings and files["strings"]:
         for s_path in files["strings"]:
             try:
@@ -196,16 +236,17 @@ def run_obfuscation(
             except Exception:
                 pass
 
-    # 3. 字符串加密
+    # 4. 字符串加密
     if str_encrypt:
-        counts["str_encrypt"] = _run_string_encrypt(project_root, files, dry_run)
+        counts["str_encrypt"] = _run_string_encrypt(project_root, dry_run)
 
-    # 4. Data/Raw 文件加密
+    # 5. Data/Raw 文件加密
     if data_encrypt:
         counts["data_encrypt"] = _run_data_encrypt(project_root, dry_run)
 
     totals = {
         "plist": len(files["plist"]),
+        "oc_ast": len(files["objc"]),
         "strings": len(files["strings"]),
         "str_encrypt": counts["str_encrypt"],
         "data_encrypt": counts["data_encrypt"],
@@ -220,6 +261,7 @@ def main():
         epilog="""
 示例:
   python3 unity_obfuscate.py /path/to/Unity-iPhone
+  python3 unity_obfuscate.py . --oc-ast
   python3 unity_obfuscate.py . --no-plist
   python3 unity_obfuscate.py . --dry-run
         """,
@@ -231,6 +273,8 @@ def main():
         help="Unity 导出的 Xcode 工程路径（含 .xcodeproj 的目录）",
     )
     parser.add_argument("--no-plist", action="store_true", help="跳过 Plist 混淆")
+    parser.add_argument("--oc-ast", action="store_true", help="启用 OC 方法拆分（Clang AST，需 pip install libclang）")
+    parser.add_argument("--min-stmts", type=int, default=5, help="OC AST 拆分最少语句数（默认 5）")
     parser.add_argument("--strings", action="store_true", help="启用 Localizable.strings 混淆")
     parser.add_argument("--str-encrypt", action="store_true", help="启用字符串自动加密")
     parser.add_argument("--data-encrypt", action="store_true", help="启用 Data/Raw 文件加密")
@@ -246,14 +290,18 @@ def main():
         counts, totals = run_obfuscation(
             project_root,
             plist=not args.no_plist,
+            oc_ast=args.oc_ast,
             strings=args.strings,
             str_encrypt=args.str_encrypt,
             data_encrypt=args.data_encrypt,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            min_stmts=args.min_stmts,
         )
 
         parts_out = [f"Plist={counts['plist']}/{totals['plist']}", f"Strings={counts['strings']}/{totals['strings']}"]
+        if args.oc_ast:
+            parts_out.append(f"OC-AST={counts['oc_ast']}/{totals['oc_ast']}")
         if args.str_encrypt:
             parts_out.append(f"StrEnc={counts['str_encrypt']}")
         if args.data_encrypt:

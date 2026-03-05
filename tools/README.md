@@ -10,7 +10,8 @@
 | `strings_obfuscator.py` | 混淆 Localizable.strings 键名 |
 | `literal_obfuscator.py` | 生成 XOR 混淆的字符串字面量代码 |
 | `method_splitter.py` | 将长方法拆分为 2-5 个小方法（Swift） |
-| `oc_advanced_obfuscator.py` | OC 高级混淆：方法拆分、代码格式化 |
+| `oc_advanced_obfuscator.py` | OC 高级混淆：方法拆分、代码格式化（正则，有风险） |
+| `oc_ast_splitter.py` | **基于 Clang AST 的 OC 方法拆分**（语句边界安全，推荐） |
 | `unity_obfuscate.py` | Unity 导出 Xcode 工程自动混淆 |
 | `string_encrypt.py` | 字符串自动加密/解密 |
 | `data_encrypt.py` | Data/Raw 文件加密/解密 |
@@ -90,6 +91,9 @@ python3 method_splitter.py MyViewController.swift --min-lines 10 --parts 3-5 --d
 # 基础混淆（Plist）
 python3 unity_obfuscate.py /path/to/Unity-iPhone
 
+# 启用 OC 方法拆分（Clang AST，需 pip3 install libclang）
+python3 unity_obfuscate.py . --oc-ast
+
 # 启用字符串加密、Data/Raw 加密（需将生成的 ObfuscatedStrings、DecryptedDataLoader 加入 Xcode）
 python3 unity_obfuscate.py . --str-encrypt --data-encrypt
 
@@ -100,7 +104,21 @@ python3 unity_obfuscate.py . --no-plist
 python3 unity_obfuscate.py . --dry-run
 ```
 
-### 6. OC 高级混淆
+### 6. OC 方法拆分（Clang AST，推荐）
+
+基于 libclang 解析 AST，在**语句边界**安全拆分，避免破坏控制流：
+
+```bash
+pip install libclang  # 依赖
+python3 oc_ast_splitter.py ViewController.m -o ViewController.m
+```
+
+Mac 若找不到 libclang，可设置：
+```bash
+export LIBCLANG_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib
+```
+
+### 7. OC 高级混淆（正则，慎用）
 
 Objective-C 方法拆分，保持执行结果不变（依赖检测），支持代码格式化：
 
@@ -112,7 +130,7 @@ python3 oc_advanced_obfuscator.py ViewController.m -o ViewController.m
 python3 oc_advanced_obfuscator.py ViewController.m --format --parts 3-5
 ```
 
-### 7. 统一入口
+### 8. 统一入口
 
 ```bash
 python3 obfuscate.py plist Info.plist
@@ -123,7 +141,7 @@ python3 obfuscate.py oc ViewController.m --format
 python3 obfuscate.py unity /path/to/Unity-iPhone
 ```
 
-### 8. 字符串自动加密/解密
+### 9. 字符串自动加密/解密
 
 扫描源文件中的字符串字面量，自动加密并生成运行时解密代码。**默认直接修改原工程文件**。
 
@@ -140,7 +158,7 @@ python3 string_encrypt.py MyFile.m --dry-run
 
 需将生成的 `ObfuscatedStrings.h`、`ObfuscatedStrings.m` 加入 Xcode 工程。
 
-### 9. Data/Raw 文件加密/解密
+### 10. Data/Raw 文件加密/解密
 
 加密 Data/Raw 下的资源文件，运行时通过加载器解密。**默认直接修改原工程文件**。
 
@@ -160,7 +178,7 @@ python3 data_encrypt.py decrypt Data/Raw.enc -o Data/Raw.dec --key <hex_key>
 
 运行时使用 `DecryptedDataFromBundle(@"path/to/file")` 加载解密后的 Data。
 
-### 10. Xcode 集成
+### 11. Xcode 集成
 
 将 `xcode_run_script.sh` 中的 `TOOLS_DIR` 改为本仓库 `tools` 目录路径，然后在 Xcode Build Phases 中添加 Run Script 执行该脚本。建议仅在 Release 配置下启用。
 

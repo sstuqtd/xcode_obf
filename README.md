@@ -65,6 +65,7 @@ python3 ipa_similarity.py app1.ipa app2.ipa --weights plist=0.5,localizable=0.3,
   - `unity_obfuscate.py` - **Unity 导出 Xcode 工程自动混淆**（Plist、字符串加密、Data 加密）
   - `string_encrypt.py` - 字符串自动加密/解密
   - `data_encrypt.py` - Data/Raw 文件加密/解密
+  - `oc_ast_splitter.py` - **基于 Clang AST 的 OC 方法拆分**（语句边界安全）
   - `obfuscate.py` - 统一入口
   - `xcode_run_script.sh` - Xcode Build Phase 集成
 
