@@ -155,7 +155,8 @@ def run_obfuscation(
             except Exception:
                 pass
 
-    return counts
+    totals = {"plist": len(files["plist"]), "objc": len(files["objc"]), "strings": len(files["strings"])}
+    return counts, totals
 
 
 def main():
@@ -190,7 +191,7 @@ def main():
         project_root = find_unity_xcode_project(Path(args.path))
         print(f"工程路径: {project_root}")
 
-        counts = run_obfuscation(
+        counts, totals = run_obfuscation(
             project_root,
             plist=not args.no_plist,
             objc=not args.no_objc,
@@ -202,8 +203,7 @@ def main():
             verbose=args.verbose,
         )
 
-        total_oc = len(files["objc"])
-        print(f"处理完成: Plist={counts['plist']}/{len(files['plist'])}, OC={counts['objc']}/{total_oc}, Strings={counts['strings']}/{len(files['strings'])}")
+        print(f"处理完成: Plist={counts['plist']}/{totals['plist']}, OC={counts['objc']}/{totals['objc']}, Strings={counts['strings']}/{totals['strings']}")
         if args.dry_run:
             print("(dry-run，未写入)")
     except FileNotFoundError as e:
