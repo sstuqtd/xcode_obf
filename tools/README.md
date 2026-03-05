@@ -84,23 +84,21 @@ python3 method_splitter.py MyViewController.swift --min-lines 10 --parts 3-5 --d
 
 ### 5. Unity 导出 Xcode 工程自动混淆
 
-针对 Unity 2020.3+ 导出的 Xcode 工程，自动执行 Plist、OC 方法拆分、字符串加密、Data/Raw 加密等。**使用时机**：Unity 导出后、Xcode 构建前。**默认直接修改原工程文件**。
+针对 Unity 2020.3+ 导出的 Xcode 工程，自动执行 Plist、字符串加密、Data/Raw 加密等。**使用时机**：Unity 导出后、Xcode 构建前。**默认直接修改原工程文件**。
 
 ```bash
-# 基础混淆（Plist + OC 方法拆分）
+# 基础混淆（Plist）
 python3 unity_obfuscate.py /path/to/Unity-iPhone
 
 # 启用字符串加密、Data/Raw 加密（需将生成的 ObfuscatedStrings、DecryptedDataLoader 加入 Xcode）
 python3 unity_obfuscate.py . --str-encrypt --data-encrypt
 
 # 仅 Plist
-python3 unity_obfuscate.py . --no-objc
+python3 unity_obfuscate.py . --no-plist
 
 # 预览
 python3 unity_obfuscate.py . --dry-run
 ```
-
-**注意**：SplashScreen、UnityAppController、main 等 Unity 核心文件会跳过 OC 方法拆分，避免 `#if`、多 `@implementation` 导致语法错误。
 
 ### 6. OC 高级混淆
 

@@ -48,6 +48,9 @@ def extract_objc_methods(content: str) -> list[tuple[str, int, int, str, str]]:
         body = content[brace_start + 1 : brace_end].strip()
         if len(body) < 20:
             continue
+        # 仅拆分 - (void) 方法，有返回值的方法拆分会破坏 return 逻辑
+        if not re.search(r"\(\s*void\s*\)", sig):
+            continue
         # 提取 selector 首段作为 name
         sig = m.group(1).strip()
         name_match = re.search(r"\)\s*(\w+)", sig)
