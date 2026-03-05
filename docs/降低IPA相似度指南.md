@@ -139,7 +139,25 @@ python3 ipa_similarity.py original.ipa obfuscated.ipa -o report.txt
 
 ---
 
-## 7. 参考链接
+## 7. Unity 2020.3+ 导出工程自动混淆
+
+针对 Unity 导出的 Xcode 工程，可使用 `unity_obfuscate.py` 一键执行：
+
+```bash
+# Unity 导出后，在工程目录执行
+python3 tools/unity_obfuscate.py /path/to/Unity-iPhone
+
+# 或使用 obfuscate 入口
+python3 tools/obfuscate.py unity /path/to/Unity-iPhone
+```
+
+**流程**：Unity 导出 → 运行 `unity_obfuscate` → Xcode 构建 IPA
+
+会自动处理：Info.plist、Classes/*.m、Classes/*.mm 等。
+
+---
+
+## 8. 参考链接
 
 - [ObfuscateMacro - Swift 字符串混淆宏](https://github.com/p-x9/ObfuscateMacro)
 - [SwiftShield - 符号混淆](https://github.com/rockbruno/swiftshield)

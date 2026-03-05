@@ -62,6 +62,7 @@ python3 ipa_similarity.py app1.ipa app2.ipa --weights plist=0.5,localizable=0.3,
   - `literal_obfuscator.py` - 字符串字面量混淆（生成 Swift/ObjC 代码）
   - `method_splitter.py` - 将长方法拆分为 2-5 个小方法（Swift）
   - `oc_advanced_obfuscator.py` - OC 高级混淆：方法拆分、代码格式化，保持执行结果不变
+  - `unity_obfuscate.py` - **Unity 导出 Xcode 工程自动混淆**（2020.3+）
   - `obfuscate.py` - 统一入口
   - `xcode_run_script.sh` - Xcode Build Phase 集成
 

@@ -42,6 +42,12 @@ def cmd_oc(args):
     oc_main()
 
 
+def cmd_unity(args):
+    from unity_obfuscate import main as unity_main
+    sys.argv = ["unity_obfuscate"] + args.extra
+    unity_main()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="IPA 相似度降低工具集（参考 降低IPA相似度指南.md）",
@@ -53,6 +59,7 @@ def main():
   literal   生成字符串字面量混淆代码（Swift/ObjC）
   split     将长方法拆分为 2-5 个小方法（Swift）
   oc        OC 高级混淆：方法拆分、代码格式化（Objective-C）
+  unity     Unity 导出 Xcode 工程自动混淆
 
 示例:
   python3 obfuscate.py plist path/to/Info.plist
@@ -60,14 +67,15 @@ def main():
   python3 obfuscate.py literal config secrets.txt -o Obfuscated.swift
   python3 obfuscate.py split MyViewController.swift -o MyViewController.swift
   python3 obfuscate.py oc ViewController.m --format --parts 3-5
+  python3 obfuscate.py unity /path/to/Unity-iPhone
         """,
     )
-    parser.add_argument("cmd", choices=["plist", "strings", "literal", "split", "oc"], help="子命令")
+    parser.add_argument("cmd", choices=["plist", "strings", "literal", "split", "oc", "unity"], help="子命令")
     parser.add_argument("extra", nargs=argparse.REMAINDER, help="传递给子命令的参数")
 
     args = parser.parse_args()
 
-    handlers = {"plist": cmd_plist, "strings": cmd_strings, "literal": cmd_literal, "split": cmd_split, "oc": cmd_oc}
+    handlers = {"plist": cmd_plist, "strings": cmd_strings, "literal": cmd_literal, "split": cmd_split, "oc": cmd_oc, "unity": cmd_unity}
     if args.cmd in handlers:
         handlers[args.cmd](args)
     else:
