@@ -9,7 +9,12 @@ Unity iOS 构建后，StreamingAssets 被复制到 `xxx.app/Data/Raw/`。当 C# 
 - **NSData dataWithContentsOfURL:**（UnityWebRequest file:// 常用）
 - **NSData dataWithContentsOfFile:**（路径直接读取）
 
-通过 **Method Swizzling** 同时替换上述两个方法，在路径包含 `Data/Raw` 时先读文件、XOR 解密、再返回解密后的 `NSData`，其余路径走原始实现。
+通过 **Method Swizzling** 替换 NSData 方法，并通过 **fishhook** 替换 `fopen`/`fclose`：
+
+- **NSData**：`dataWithContentsOfFile:`、`dataWithContentsOfFile:options:error:`、`dataWithContentsOfURL:`、`dataWithContentsOfURL:options:error:`
+- **fopen/fclose**：拦截 `File.ReadAllBytes`、`File.ReadAllText` 等 C 层读取（需 fishhook）
+
+`setup-raw` 会自动复制 fishhook 并生成 DataRawFopenHook.mm，覆盖上述全部读取路径。
 
 ## 流程
 
@@ -87,6 +92,15 @@ Hook 会检查路径是否包含以下任一子串：
 |------|------|------|
 | **DecryptedDataFromBundle**（手动） | 精确控制、无全局影响 | 需改 C# 或 native 调用点 |
 | **Hook**（自动） | 零侵入、自动解密 | 影响所有 Data/Raw 读取，需尽早安装 |
+
+## 排查 JSON 解析失败
+
+若仍出现 `ArgumentException: JSON parse error`：
+
+1. **确认已执行 setup-raw 加密**：Data/Raw 下文件应为 XOR 加密，Hook 负责解密
+2. **确认密钥一致**：加密与 Hook 使用同一密钥（setup-raw 会一并处理）
+3. **确认 fishhook 已集成**：`setup-raw` 会自动复制 fishhook.c/h 并生成 DataRawFopenHook.mm，支持 `File.ReadAllBytes`/`File.ReadAllText`
+4. **应用自有加密**：若 `Util.ReadCryptedFileText` 等对 Data/Raw 做二次解密，会与 Hook 冲突，需关闭或调整
 
 ## 参考
 

@@ -8,6 +8,7 @@ import argparse
 import os
 import re
 import secrets
+import shutil
 import sys
 from pathlib import Path
 
@@ -74,14 +75,16 @@ NSData *DecryptedDataFromBundle(NSString *relativePath) {{
 '''
 
 
-def generate_objc_hook(key: bytes, key_name: str = "kDataEncryptKey") -> str:
-    """生成 ObjC Hook 解密加载器（拦截 NSData dataWithContentsOfFile: 和 dataWithContentsOfURL:，Data/Raw 路径先解密再返回）"""
+def generate_objc_hook(key: bytes, key_name: str = "kDataEncryptKey", include_fopen: bool = True) -> str:
+    """生成 ObjC Hook 解密加载器（拦截 NSData + fopen，Data/Raw 路径先解密再返回）"""
     key_hex = generate_key_hex(key)
+    fopen_decl = "extern void DataRawHookInstallFopen(void);\n\n" if include_fopen else ""
+    fopen_call = "\n    DataRawHookInstallFopen();" if include_fopen else ""
     return f'''
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
-static unsigned char {key_name}[] = {{{key_hex}}};
+{fopen_decl}static unsigned char {key_name}[] = {{{key_hex}}};
 static const int {key_name}Len = sizeof({key_name});
 
 static BOOL _pathNeedsDecrypt(NSString* path) {{
@@ -101,7 +104,9 @@ static NSData* _xorDecrypt(NSData* encrypted) {{
 }}
 
 static NSData* (*original_dataWithContentsOfFile)(id, SEL, NSString*) = nil;
+static NSData* (*original_dataWithContentsOfFileOptionsError)(id, SEL, NSString*, NSUInteger, NSError**) = nil;
 static NSData* (*original_dataWithContentsOfURL)(id, SEL, NSURL*) = nil;
+static NSData* (*original_dataWithContentsOfURLOptionsError)(id, SEL, NSURL*, NSUInteger, NSError**) = nil;
 
 static NSData* hooked_dataWithContentsOfFile(id self, SEL _cmd, NSString* path) {{
     NSData* data = original_dataWithContentsOfFile(self, _cmd, path);
@@ -110,13 +115,24 @@ static NSData* hooked_dataWithContentsOfFile(id self, SEL _cmd, NSString* path) 
     return data;
 }}
 
+static NSData* hooked_dataWithContentsOfFileOptionsError(id self, SEL _cmd, NSString* path, NSUInteger opts, NSError** err) {{
+    NSData* data = original_dataWithContentsOfFileOptionsError(self, _cmd, path, opts, err);
+    if (data && _pathNeedsDecrypt(path))
+        return _xorDecrypt(data);
+    return data;
+}}
+
 static NSData* hooked_dataWithContentsOfURL(id self, SEL _cmd, NSURL* url) {{
     NSData* data = original_dataWithContentsOfURL(self, _cmd, url);
-    if (data && url && url.isFileURL) {{
-        NSString* path = url.path;
-        if (_pathNeedsDecrypt(path))
-            return _xorDecrypt(data);
-    }}
+    if (data && url && url.isFileURL && _pathNeedsDecrypt(url.path))
+        return _xorDecrypt(data);
+    return data;
+}}
+
+static NSData* hooked_dataWithContentsOfURLOptionsError(id self, SEL _cmd, NSURL* url, NSUInteger opts, NSError** err) {{
+    NSData* data = original_dataWithContentsOfURLOptionsError(self, _cmd, url, opts, err);
+    if (data && url && url.isFileURL && _pathNeedsDecrypt(url.path))
+        return _xorDecrypt(data);
     return data;
 }}
 
@@ -127,11 +143,115 @@ void DataRawHookInstall(void) {{
         original_dataWithContentsOfFile = (void*)method_getImplementation(m1);
         method_setImplementation(m1, (IMP)hooked_dataWithContentsOfFile);
     }}
+    Method m1b = class_getClassMethod([NSData class], @selector(dataWithContentsOfFile:options:error:));
+    if (m1b) {{
+        original_dataWithContentsOfFileOptionsError = (void*)method_getImplementation(m1b);
+        method_setImplementation(m1b, (IMP)hooked_dataWithContentsOfFileOptionsError);
+    }}
     Method m2 = class_getClassMethod([NSData class], @selector(dataWithContentsOfURL:));
     if (m2) {{
         original_dataWithContentsOfURL = (void*)method_getImplementation(m2);
         method_setImplementation(m2, (IMP)hooked_dataWithContentsOfURL);
     }}
+    Method m2b = class_getClassMethod([NSData class], @selector(dataWithContentsOfURL:options:error:));
+    if (m2b) {{
+        original_dataWithContentsOfURLOptionsError = (void*)method_getImplementation(m2b);
+        method_setImplementation(m2b, (IMP)hooked_dataWithContentsOfURLOptionsError);
+    }}{fopen_call}
+}}
+'''
+
+
+def generate_fopen_hook(key: bytes, key_name: str = "kDataEncryptKey") -> str:
+    """生成 fopen/fclose Hook（拦截 File.ReadAllBytes/ReadAllText 等 C 层读取）"""
+    key_hex = generate_key_hex(key)
+    return f'''
+#import <Foundation/Foundation.h>
+#import <stdio.h>
+#import <string.h>
+#import "fishhook.h"
+
+static unsigned char {key_name}[] = {{{key_hex}}};
+static const int {key_name}Len = sizeof({key_name});
+
+static FILE* (*orig_fopen)(const char*, const char*) = NULL;
+static int (*orig_fclose)(FILE*) = NULL;
+
+static NSMutableDictionary* _tempFilesMap = nil;
+static NSLock* _mapLock = nil;
+
+static BOOL _pathNeedsDecrypt(const char* path) {{
+    if (!path) return NO;
+    NSString* s = [NSString stringWithUTF8String:path];
+    return [s containsString:@"Data/Raw"] || [s rangeOfString:@"/Raw/"].location != NSNotFound;
+}}
+
+static BOOL _isReadMode(const char* mode) {{
+    if (!mode) return NO;
+    return mode[0] == 'r';
+}}
+
+static void _xorDecryptBytes(unsigned char* buf, size_t len) {{
+    for (size_t i = 0; i < len; i++)
+        buf[i] ^= {key_name}[i % {key_name}Len];
+}}
+
+static FILE* hooked_fopen(const char* path, const char* mode) {{
+    if (!orig_fopen) return fopen(path, mode);
+    if (!_pathNeedsDecrypt(path) || !_isReadMode(mode))
+        return orig_fopen(path, mode);
+
+    FILE* f = orig_fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {{ fclose(f); return NULL; }}
+    unsigned char* buf = (unsigned char*)malloc((size_t)sz);
+    if (!buf) {{ fclose(f); return NULL; }}
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    orig_fclose(f);
+    if (n != (size_t)sz) {{ free(buf); return NULL; }}
+
+    _xorDecryptBytes(buf, n);
+
+    NSString* tempDir = NSTemporaryDirectory();
+    NSString* tempPath = [tempDir stringByAppendingPathComponent:[[NSUUID UUID] UUIDString]];
+    NSData* data = [NSData dataWithBytes:buf length:n];
+    free(buf);
+    if (![data writeToFile:tempPath atomically:NO]) return NULL;
+
+    FILE* out = orig_fopen([tempPath UTF8String], "rb");
+    if (!out) {{ [[NSFileManager defaultManager] removeItemAtPath:tempPath error:nil]; return NULL; }}
+
+    if (!_tempFilesMap) {{ _tempFilesMap = [NSMutableDictionary new]; _mapLock = [NSLock new]; }}
+    [_mapLock lock];
+    _tempFilesMap[[NSValue valueWithPointer:(void*)out]] = tempPath;
+    [_mapLock unlock];
+    return out;
+}}
+
+static int hooked_fclose(FILE* fp) {{
+    if (!orig_fclose) return fclose(fp);
+    NSString* tempPath = nil;
+    if (_mapLock && _tempFilesMap) {{
+        [_mapLock lock];
+        tempPath = _tempFilesMap[[NSValue valueWithPointer:(void*)fp]];
+        if (tempPath) [_tempFilesMap removeObjectForKey:[NSValue valueWithPointer:(void*)fp]];
+        [_mapLock unlock];
+    }}
+    int r = orig_fclose(fp);
+    if (tempPath) [[NSFileManager defaultManager] removeItemAtPath:tempPath error:nil];
+    return r;
+}}
+
+void DataRawHookInstallFopen(void) {{
+    if (orig_fopen) return;
+    struct rebinding rebinds[] = {{
+        {{"fopen", (void*)hooked_fopen, (void**)&orig_fopen}},
+        {{"fclose", (void*)hooked_fclose, (void**)&orig_fclose}}
+    }};
+    rebind_symbols(rebinds, sizeof(rebinds)/sizeof(rebinds[0]));
 }}
 '''
 
@@ -158,8 +278,8 @@ def _gen_uuid() -> str:
     return secrets.token_hex(12).upper()
 
 
-def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path) -> bool:
-    """将 DataRawHook.m/.h 添加到 Xcode 工程，返回是否成功"""
+def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path, has_fopen_hook: bool) -> bool:
+    """将 DataRawHook、fishhook、DataRawFopenHook 添加到 Xcode 工程"""
     xcodeproj = next(project_root.glob("*.xcodeproj"), None)
     if not xcodeproj:
         return False
@@ -168,44 +288,64 @@ def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path) -> bool
         return False
 
     content = pbx.read_text(encoding="utf-8", errors="replace")
-    if "DataRawHook.m" in content:
-        return True  # 已添加
+    need_basic = "DataRawHook.m" not in content
+    need_fopen = has_fopen_hook and "DataRawFopenHook.mm" not in content
+    if not need_basic and not need_fopen:
+        return True  # 已全部添加
 
-    ref_m = _gen_uuid()
-    ref_h = _gen_uuid()
-    build_m = _gen_uuid()
+    refs, builds, children = [], [], []
+    ref_m = ref_h = build_m = None
+    if need_basic:
+        ref_m = _gen_uuid()
+        ref_h = _gen_uuid()
+        build_m = _gen_uuid()
+        refs.append(f'{ref_m} /* DataRawHook.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DataRawHook.m; sourceTree = "<group>"; }};')
+        refs.append(f'{ref_h} /* DataRawHook.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DataRawHook.h; sourceTree = "<group>"; }};')
+        builds.append(f'{build_m} /* DataRawHook.m in Sources */ = {{isa = PBXBuildFile; fileRef = {ref_m} /* DataRawHook.m */; }};')
+        children.append(f'{ref_m} /* DataRawHook.m */')
+        children.append(f'{ref_h} /* DataRawHook.h */')
 
-    # PBXFileReference
-    file_ref_m = f'{ref_m} /* DataRawHook.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DataRawHook.m; sourceTree = "<group>"; }};'
-    file_ref_h = f'{ref_h} /* DataRawHook.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DataRawHook.h; sourceTree = "<group>"; }};'
+    if need_fopen:
+        ref_fish_c = _gen_uuid()
+        ref_fish_h = _gen_uuid()
+        ref_fopen = _gen_uuid()
+        build_fish = _gen_uuid()
+        build_fopen = _gen_uuid()
+        refs.append(f'{ref_fish_c} /* fishhook.c */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = fishhook.c; sourceTree = "<group>"; }};')
+        refs.append(f'{ref_fish_h} /* fishhook.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fishhook.h; sourceTree = "<group>"; }};')
+        refs.append(f'{ref_fopen} /* DataRawFopenHook.mm */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = DataRawFopenHook.mm; sourceTree = "<group>"; }};')
+        builds.append(f'{build_fish} /* fishhook.c in Sources */ = {{isa = PBXBuildFile; fileRef = {ref_fish_c} /* fishhook.c */; }};')
+        builds.append(f'{build_fopen} /* DataRawFopenHook.mm in Sources */ = {{isa = PBXBuildFile; fileRef = {ref_fopen} /* DataRawFopenHook.mm */; }};')
+        children.extend([f'{ref_fish_c} /* fishhook.c */', f'{ref_fish_h} /* fishhook.h */', f'{ref_fopen} /* DataRawFopenHook.mm */'])
 
-    # PBXBuildFile
-    build_file = f'{build_m} /* DataRawHook.m in Sources */ = {{isa = PBXBuildFile; fileRef = {ref_m} /* DataRawHook.m */; }};'
+    if refs:
+        fr_match = re.search(r'(/\* Begin PBXFileReference section \*/\n)', content)
+        if fr_match:
+            content = content[: fr_match.end()] + "\t\t" + "\n\t\t".join(refs) + "\n" + content[fr_match.end() :]
 
-    # 插入 PBXFileReference
-    fr_match = re.search(r'(/\* Begin PBXFileReference section \*/\n)', content)
-    if fr_match:
-        content = content[: fr_match.end()] + f"\t\t{file_ref_m}\n\t\t{file_ref_h}\n" + content[fr_match.end() :]
+    if builds:
+        bf_match = re.search(r'(/\* Begin PBXBuildFile section \*/\n)', content)
+        if bf_match:
+            content = content[: bf_match.end()] + "\t\t" + "\n\t\t".join(builds) + "\n" + content[bf_match.end() :]
 
-    # 插入 PBXBuildFile
-    bf_match = re.search(r'(/\* Begin PBXBuildFile section \*/\n)', content)
-    if bf_match:
-        content = content[: bf_match.end()] + f"\t\t{build_file}\n" + content[bf_match.end() :]
-
-    # 添加到 Classes 组的 children（匹配 path = Classes 或 name = Classes）
+    # 添加到 Classes 组的 children
+    if not children:
+        pbx.write_text(content, encoding="utf-8")
+        return True
+    new_refs = "\n\t\t\t" + ",\n\t\t\t".join(children) + ","
     classes_pattern = r'([a-fA-F0-9]{24} /\* Classes \*\/ = \{\s+isa = PBXGroup;\s+children = \()(.*?)(\);)'
     classes_alt = r'(\/\* Classes \*\/ = \{\s+isa = PBXGroup;\s+children = \()(.*?)(\);)'
-    new_refs = f"\n\t\t\t{ref_m} /* DataRawHook.m */,\n\t\t\t{ref_h} /* DataRawHook.h */,"
 
     def add_to_classes(m):
-        prefix, children, suffix = m.groups()
-        return prefix + new_refs + children + suffix
+        prefix, ch, suffix = m.groups()
+        return prefix + new_refs + ch + suffix
 
     content = re.sub(classes_pattern, add_to_classes, content, flags=re.DOTALL)
     if "DataRawHook.m" not in content:
         content = re.sub(classes_alt, add_to_classes, content, flags=re.DOTALL)
 
-    # 添加到 PBXSourcesBuildPhase 的 files（优先添加到含 UnityAppController 的 target）
+    # 添加到 PBXSourcesBuildPhase 的 files
+    new_sources = "\n\t\t\t" + ",\n\t\t\t".join(builds) + ","
     sources_pattern = r'([a-fA-F0-9]{24} /\* Sources \*\/ = \{\s+isa = PBXSourcesBuildPhase;\s+buildActionMask = [^;]+;\s+files = \()(.*?)(\);)'
     added = False
 
@@ -215,9 +355,8 @@ def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path) -> bool
         if added:
             return m.group(0)
         if "UnityAppController" in files or ".mm" in files or ".m " in files:
-            new_file = f"\n\t\t\t{build_m} /* DataRawHook.m in Sources */,"
             added = True
-            return prefix + new_file + files + suffix
+            return prefix + new_sources + files + suffix
         return m.group(0)
 
     content = re.sub(sources_pattern, add_to_sources, content, flags=re.DOTALL)
@@ -225,8 +364,7 @@ def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path) -> bool
         m = re.search(r'([a-fA-F0-9]{24} /\* Sources \*\/ = \{\s+isa = PBXSourcesBuildPhase;\s+buildActionMask = [^;]+;\s+files = \()(.*?)(\);)', content, re.DOTALL)
         if m:
             prefix, files, suffix = m.groups()
-            new_file = f"\n\t\t\t{build_m} /* DataRawHook.m in Sources */,"
-            content = content[: m.start()] + prefix + new_file + files + suffix + content[m.end() :]
+            content = content[: m.start()] + prefix + new_sources + files + suffix + content[m.end() :]
 
     pbx.write_text(content, encoding="utf-8")
     return True
@@ -368,7 +506,7 @@ def main():
 
     elif args.cmd == "gen-hook":
         key = parse_key(args.key)
-        code = generate_objc_hook(key)
+        code = generate_objc_hook(key, include_fopen=False)
         out_m = Path(args.output or "DataRawHook.m")
         out_m.write_text(code, encoding="utf-8")
         out_h = out_m.with_suffix(".h")
@@ -399,14 +537,31 @@ def main():
         print(f"密钥已保存: {key_out}")
 
         classes_dir.mkdir(parents=True, exist_ok=True)
-        code = generate_objc_hook(key)
+        fishhook_dir = Path(__file__).parent / "fishhook"
+        has_fishhook = (fishhook_dir / "fishhook.c").is_file() and (fishhook_dir / "fishhook.h").is_file()
+        code = generate_objc_hook(key, include_fopen=has_fishhook)
         out_m = classes_dir / "DataRawHook.m"
         out_h = classes_dir / "DataRawHook.h"
         out_m.write_text(code, encoding="utf-8")
         out_h.write_text(_DATA_RAW_HOOK_HEADER, encoding="utf-8")
         print(f"Hook 加载器已生成: {out_m}, {out_h}")
 
-        if _add_data_raw_hook_to_pbxproj(project_root, classes_dir):
+        fopen_code = generate_fopen_hook(key)
+        out_fopen = classes_dir / "DataRawFopenHook.mm"
+        out_fopen.write_text(fopen_code, encoding="utf-8")
+        has_fishhook = False
+        for name in ("fishhook.c", "fishhook.h"):
+            src = fishhook_dir / name
+            if src.is_file():
+                dst = classes_dir / name
+                shutil.copy2(src, dst)
+                has_fishhook = True
+        if has_fishhook:
+            print(f"fopen Hook 已生成: {out_fopen}（fishhook 已复制）")
+        else:
+            print("提示: 未找到 fishhook，请手动将 tools/fishhook/ 下 fishhook.c、fishhook.h 复制到 Classes/")
+
+        if _add_data_raw_hook_to_pbxproj(project_root, classes_dir, has_fishhook and out_fopen.is_file()):
             print("已自动添加到 Xcode 工程 (Classes)")
         else:
             print("提示: 请手动将 DataRawHook.m、DataRawHook.h 加入 Xcode Classes 组")
