@@ -4,12 +4,12 @@
 
 ## 原理
 
-Unity iOS 构建后，StreamingAssets 被复制到 `xxx.app/Data/Raw/`。当 C# 使用 `File.ReadAllBytes`、`UnityWebRequest`、`WWW` 等读取时，底层会调用：
+Unity iOS 构建后，StreamingAssets 被复制到 `xxx.app/Data/Raw/`。当 C# 使用 `UnityWebRequest`（file:// URL）、`File.ReadAllBytes`、`WWW` 等读取时，底层会调用：
 
-- **NSData dataWithContentsOfFile:**（Objective-C）
-- **fopen** / **fread**（C 层，IL2CPP 可能走此路径）
+- **NSData dataWithContentsOfURL:**（UnityWebRequest file:// 常用）
+- **NSData dataWithContentsOfFile:**（路径直接读取）
 
-通过 **Method Swizzling** 替换 `[NSData dataWithContentsOfFile:]`，在路径包含 `Data/Raw` 时先读文件、XOR 解密、再返回解密后的 `NSData`，其余路径走原始实现。
+通过 **Method Swizzling** 同时替换上述两个方法，在路径包含 `Data/Raw` 时先读文件、XOR 解密、再返回解密后的 `NSData`，其余路径走原始实现。
 
 ## 流程
 

@@ -75,7 +75,7 @@ NSData *DecryptedDataFromBundle(NSString *relativePath) {{
 
 
 def generate_objc_hook(key: bytes, key_name: str = "kDataEncryptKey") -> str:
-    """生成 ObjC Hook 解密加载器（替换 NSData dataWithContentsOfFile:，Data/Raw 路径先解密再返回）"""
+    """生成 ObjC Hook 解密加载器（拦截 NSData dataWithContentsOfFile: 和 dataWithContentsOfURL:，Data/Raw 路径先解密再返回）"""
     key_hex = generate_key_hex(key)
     return f'''
 #import <Foundation/Foundation.h>
@@ -84,32 +84,54 @@ def generate_objc_hook(key: bytes, key_name: str = "kDataEncryptKey") -> str:
 static unsigned char {key_name}[] = {{{key_hex}}};
 static const int {key_name}Len = sizeof({key_name});
 
+static BOOL _pathNeedsDecrypt(NSString* path) {{
+    if (!path || path.length == 0) return NO;
+    NSString* p = [path stringByStandardizingPath];
+    return [p containsString:@"Data/Raw"] || [p rangeOfString:@"/Raw/"].location != NSNotFound;
+}}
+
+static NSData* _xorDecrypt(NSData* encrypted) {{
+    if (!encrypted || encrypted.length == 0) return nil;
+    NSMutableData* decrypted = [NSMutableData dataWithLength:encrypted.length];
+    unsigned char* dst = decrypted.mutableBytes;
+    const unsigned char* src = encrypted.bytes;
+    for (NSUInteger i = 0; i < encrypted.length; i++)
+        dst[i] = src[i] ^ {key_name}[i % {key_name}Len];
+    return decrypted;
+}}
+
 static NSData* (*original_dataWithContentsOfFile)(id, SEL, NSString*) = nil;
+static NSData* (*original_dataWithContentsOfURL)(id, SEL, NSURL*) = nil;
 
 static NSData* hooked_dataWithContentsOfFile(id self, SEL _cmd, NSString* path) {{
-    if (!path || path.length == 0)
-        return original_dataWithContentsOfFile ? original_dataWithContentsOfFile(self, _cmd, path) : nil;
+    NSData* data = original_dataWithContentsOfFile(self, _cmd, path);
+    if (data && _pathNeedsDecrypt(path))
+        return _xorDecrypt(data);
+    return data;
+}}
 
-    NSString* p = [path stringByStandardizingPath];
-    if ([p containsString:@"Data/Raw"] || [p rangeOfString:@"/Raw/"].location != NSNotFound) {{
-        NSData* encrypted = original_dataWithContentsOfFile(self, _cmd, path);
-        if (!encrypted || encrypted.length == 0) return nil;
-        NSMutableData* decrypted = [NSMutableData dataWithLength:encrypted.length];
-        unsigned char* dst = decrypted.mutableBytes;
-        const unsigned char* src = encrypted.bytes;
-        for (NSUInteger i = 0; i < encrypted.length; i++)
-            dst[i] = src[i] ^ {key_name}[i % {key_name}Len];
-        return decrypted;
+static NSData* hooked_dataWithContentsOfURL(id self, SEL _cmd, NSURL* url) {{
+    NSData* data = original_dataWithContentsOfURL(self, _cmd, url);
+    if (data && url && url.isFileURL) {{
+        NSString* path = url.path;
+        if (_pathNeedsDecrypt(path))
+            return _xorDecrypt(data);
     }}
-    return original_dataWithContentsOfFile(self, _cmd, path);
+    return data;
 }}
 
 void DataRawHookInstall(void) {{
     if (original_dataWithContentsOfFile) return;
-    Method m = class_getClassMethod([NSData class], @selector(dataWithContentsOfFile:));
-    if (!m) return;
-    original_dataWithContentsOfFile = (void*)method_getImplementation(m);
-    method_setImplementation(m, (IMP)hooked_dataWithContentsOfFile);
+    Method m1 = class_getClassMethod([NSData class], @selector(dataWithContentsOfFile:));
+    if (m1) {{
+        original_dataWithContentsOfFile = (void*)method_getImplementation(m1);
+        method_setImplementation(m1, (IMP)hooked_dataWithContentsOfFile);
+    }}
+    Method m2 = class_getClassMethod([NSData class], @selector(dataWithContentsOfURL:));
+    if (m2) {{
+        original_dataWithContentsOfURL = (void*)method_getImplementation(m2);
+        method_setImplementation(m2, (IMP)hooked_dataWithContentsOfURL);
+    }}
 }}
 '''
 
