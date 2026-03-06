@@ -164,16 +164,17 @@ python3 string_encrypt.py MyFile.m --dry-run
 加密 Data/Raw 下的资源文件，运行时通过加载器解密。**默认直接修改原工程文件**。
 
 ```bash
-# 加密（直接修改 Data/Raw 下原文件）
+# 一键完成：加密 Data/Raw + 生成 Hook 加载器（推荐）
+python3 data_encrypt.py setup-raw /path/to/Unity-iPhone
+# 或从工程目录执行
+cd /path/to/Unity-iPhone && python3 data_encrypt.py setup-raw
+
+# 指定密钥（如 xwlkey）
+python3 data_encrypt.py setup-raw . --key xwlkey
+
+# 分步加密
 python3 data_encrypt.py encrypt Data/Raw --key-out key.bin
-
-# 加密到新目录（保留原文件）
-python3 data_encrypt.py encrypt Data/Raw -o Data/Raw.enc --key-out key.bin
-
-# 生成 ObjC 加载器（需传入相同密钥，可用 key.bin.hex）
 python3 data_encrypt.py gen-loader --key $(cat key.bin.hex) -o DecryptedDataLoader.m
-
-# 生成 Hook 加载器（自动拦截 Data/Raw 读取，零侵入）
 python3 data_encrypt.py gen-hook --key $(cat key.bin.hex) -o DataRawHook.m
 
 # 解密（测试用）

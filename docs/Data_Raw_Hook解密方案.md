@@ -27,19 +27,27 @@ NSData dataWithContentsOfFile:path
 
 ## 使用步骤
 
-### 1. 加密 Data/Raw
+### 方式一：一键完成（推荐）
+
+```bash
+cd /path/to/Unity-iPhone
+python3 tools/data_encrypt.py setup-raw
+```
+
+或指定密钥、工程路径：
+
+```bash
+python3 tools/data_encrypt.py setup-raw /path/to/Unity-iPhone --key xwlkey
+```
+
+会完成：加密 Data/Raw、生成 DataRawHook.m、DataRawHook.h、保存 key.bin。
+
+### 方式二：分步执行
 
 ```bash
 python3 tools/data_encrypt.py encrypt Data/Raw --key-out key.bin
-```
-
-### 2. 生成 Hook 加载器
-
-```bash
 python3 tools/data_encrypt.py gen-hook --key $(cat key.bin.hex) -o DataRawHook.m
 ```
-
-会生成 `DataRawHook.m` 和 `DataRawHook.h`。
 
 ### 3. 集成到 Xcode
 

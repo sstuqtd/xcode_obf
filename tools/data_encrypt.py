@@ -146,14 +146,23 @@ def main():
 
     # 生成 Hook 加载器（Method Swizzling 拦截 NSData dataWithContentsOfFile:）
     p_hook = sub.add_parser("gen-hook", help="生成 Hook 解密加载器（自动拦截 Data/Raw 读取）")
-    p_hook.add_argument("--key", required=True, help="16 进制密钥")
+    p_hook.add_argument("--key", required=True, help="16 进制或文本密钥")
     p_hook.add_argument("-o", "--output", help="输出 .m 文件路径（默认 DataRawHook.m）")
+
+    # 一键完成：加密 Data/Raw + 生成 Hook 加载器
+    p_setup = sub.add_parser("setup-raw", help="一键加密 Data/Raw 并生成 Hook 加载器（Unity Xcode 工程）")
+    p_setup.add_argument("project", nargs="?", default=".", help="工程根目录（默认当前目录）")
+    p_setup.add_argument("--key", help="密钥（默认随机生成，支持十六进制或文本如 xwlkey）")
+    p_setup.add_argument("--key-out", default="key.bin", help="密钥输出文件（默认 key.bin）")
 
     args = parser.parse_args()
 
     def parse_key(s: str) -> bytes:
         s = s.replace(" ", "").replace("0x", "").replace(",", "")
-        return bytes.fromhex(s)
+        try:
+            return bytes.fromhex(s)
+        except ValueError:
+            return s.encode("utf-8")
 
     if args.cmd == "encrypt":
         key = parse_key(args.key) if args.key else secrets.token_bytes(16)
@@ -225,6 +234,40 @@ def main():
         )
         print(f"Hook 加载器已生成: {out_m}, {out_h}")
         print("集成: 在 application:didFinishLaunchingWithOptions 最早处调用 DataRawHookInstall();")
+
+    elif args.cmd == "setup-raw":
+        project_root = Path(args.project).resolve()
+        data_raw = project_root / "Data" / "Raw"
+        if not data_raw.is_dir():
+            print(f"错误: 未找到 Data/Raw 目录: {data_raw}", file=sys.stderr)
+            sys.exit(1)
+        key = parse_key(args.key) if args.key else secrets.token_bytes(16)
+        key_out = project_root / args.key_out
+        key_out.parent.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        for f in data_raw.rglob("*"):
+            if f.is_file():
+                encrypt_file(f, f, key)
+                count += 1
+
+        key_out.write_bytes(key)
+        (Path(str(key_out) + ".hex")).write_text(key.hex())
+        print(f"加密完成: Data/Raw 下 {count} 个文件")
+        print(f"密钥已保存: {key_out}")
+
+        code = generate_objc_hook(key)
+        out_m = project_root / "DataRawHook.m"
+        out_h = project_root / "DataRawHook.h"
+        out_m.write_text(code, encoding="utf-8")
+        out_h.write_text(
+            "#import <Foundation/Foundation.h>\n\nvoid DataRawHookInstall(void);\n",
+            encoding="utf-8",
+        )
+        print(f"Hook 加载器已生成: {out_m}, {out_h}")
+        print("")
+        print("下一步: 将 DataRawHook.m、DataRawHook.h 加入 Xcode，")
+        print("        在 application:didFinishLaunchingWithOptions 最早处调用 DataRawHookInstall();")
 
     else:
         parser.print_help()
