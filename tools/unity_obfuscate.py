@@ -128,8 +128,8 @@ def collect_unity_project_files(project_root: Path) -> dict:
             continue
         files["plist"].append(plist)
 
-    # Objective-C：.m, .mm
-    for ext in ("*.m", "*.mm"):
+    # Objective-C / C / C++：.m, .mm, .c, .cpp, .cc, .cxx（用于 AST 方法/函数拆分）
+    for ext in ("*.m", "*.mm", "*.c", "*.cpp", "*.cc", "*.cxx"):
         for f in project_root.rglob(ext):
             if "Pods" in str(f) or "DerivedData" in str(f):
                 continue
@@ -147,7 +147,7 @@ def collect_unity_project_files(project_root: Path) -> dict:
 
 
 def _run_oc_ast_split(project_root: Path, files: dict, dry_run: bool, min_stmts: int) -> int:
-    """对整个 Unity Xcode 工程执行 Clang AST 方法拆分"""
+    """对整个 Unity Xcode 工程执行 Clang AST 方法/函数拆分（OC/C/C++）"""
     count = 0
     for oc_path in files.get("objc", []):
         try:
@@ -187,7 +187,7 @@ def run_obfuscation(
     files = collect_unity_project_files(project_root)
 
     if verbose:
-        print(f"扫描到: Plist={len(files['plist'])}, OC={len(files['objc'])}, Strings={len(files['strings'])}")
+        print(f"扫描到: Plist={len(files['plist'])}, OC/C/C++={len(files['objc'])}, Strings={len(files['strings'])}")
 
     # 1. Plist 混淆
     if plist and files["plist"]:

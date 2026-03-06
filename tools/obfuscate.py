@@ -80,7 +80,7 @@ def main():
   unity     Unity 导出 Xcode 工程自动混淆
   str-enc  字符串自动加密/解密
   data-enc Data/Raw 文件加密/解密
-  oc-ast   OC 方法拆分（Clang AST，语句边界安全）
+  oc-ast   OC/C/C++ 方法/函数拆分（Clang AST，语句边界安全）
 
 示例:
   python3 obfuscate.py plist path/to/Info.plist
@@ -92,6 +92,7 @@ def main():
   python3 obfuscate.py str-enc Classes/
   python3 obfuscate.py data-enc encrypt Data/Raw -o Data/Raw.enc
   python3 obfuscate.py oc-ast ViewController.m
+  python3 obfuscate.py oc-ast foo.c
         """,
     )
     parser.add_argument("cmd", choices=["plist", "strings", "literal", "split", "oc", "oc-ast", "unity", "str-enc", "data-enc"], help="子命令")

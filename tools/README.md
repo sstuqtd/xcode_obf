@@ -11,7 +11,7 @@
 | `literal_obfuscator.py` | 生成 XOR 混淆的字符串字面量代码 |
 | `method_splitter.py` | 将长方法拆分为 2-5 个小方法（Swift） |
 | `oc_advanced_obfuscator.py` | OC 高级混淆：方法拆分、代码格式化（正则，有风险） |
-| `oc_ast_splitter.py` | **基于 Clang AST 的 OC 方法拆分**（语句边界安全，推荐） |
+| `oc_ast_splitter.py` | **基于 Clang AST 的 OC/C/C++ 方法/函数拆分**（语句边界安全，推荐） |
 | `unity_obfuscate.py` | Unity 导出 Xcode 工程自动混淆 |
 | `string_encrypt.py` | 字符串自动加密/解密 |
 | `data_encrypt.py` | Data/Raw 文件加密/解密 |
@@ -104,13 +104,14 @@ python3 unity_obfuscate.py . --no-plist
 python3 unity_obfuscate.py . --dry-run
 ```
 
-### 6. OC 方法拆分（Clang AST，推荐）
+### 6. OC/C/C++ 方法/函数拆分（Clang AST，推荐）
 
-基于 libclang 解析 AST，在**语句边界**安全拆分，避免破坏控制流：
+基于 libclang 解析 AST，在**语句边界**安全拆分，支持 `.m/.mm`（Objective-C）、`.c`（C）、`.cpp/.cc/.cxx`（C++）：
 
 ```bash
 pip install libclang  # 依赖
 python3 oc_ast_splitter.py ViewController.m -o ViewController.m
+python3 oc_ast_splitter.py foo.c -o foo.c
 ```
 
 Mac 若找不到 libclang，可设置：

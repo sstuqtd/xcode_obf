@@ -77,7 +77,8 @@ let url = #ObfuscatedString("https://api.example.com", method: .bitXOR)
 | 工具 | 语言 | 说明 |
 |------|------|------|
 | `method_splitter.py` | Swift | 按空行段落拆分，依赖检测避免作用域错误 |
-| `oc_advanced_obfuscator.py` | Objective-C | 同上，支持 `--format` 代码格式化 |
+| `oc_ast_splitter.py` | **OC/C/C++** | **Clang AST 语句边界拆分**（推荐，支持 .m/.mm/.c/.cpp） |
+| `oc_advanced_obfuscator.py` | Objective-C | 正则拆分，支持 `--format` 代码格式化 |
 
 - 自动检测跨块变量依赖，有依赖则合并，不拆分
 - 生成 `_obf_xxx` 形式的 private 辅助方法
