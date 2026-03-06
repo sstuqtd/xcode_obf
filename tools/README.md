@@ -164,13 +164,14 @@ python3 string_encrypt.py MyFile.m --dry-run
 加密 Data/Raw 下的资源文件，运行时通过加载器解密。**默认直接修改原工程文件**。
 
 ```bash
-# 一键完成：加密 Data/Raw + 生成 Hook 加载器（推荐）
+# 一键完成：加密 Data/Raw + 生成 Hook 加载器 + 自动集成 Xcode（推荐）
 python3 data_encrypt.py setup-raw /path/to/Unity-iPhone
 # 或从工程目录执行
 cd /path/to/Unity-iPhone && python3 data_encrypt.py setup-raw
 
 # 指定密钥（如 xwlkey）
 python3 data_encrypt.py setup-raw . --key xwlkey
+# 自动完成：文件放入 Classes/、修改 pbxproj、在 UnityAppController.mm 注入 DataRawHookInstall()
 
 # 分步加密
 python3 data_encrypt.py encrypt Data/Raw --key-out key.bin
@@ -182,7 +183,7 @@ python3 data_encrypt.py decrypt Data/Raw.enc -o Data/Raw.dec --key <hex_key>
 ```
 
 - **手动加载**：运行时使用 `DecryptedDataFromBundle(@"path/to/file")` 加载解密后的 Data。
-- **Hook 自动解密**：将 `DataRawHook.m`、`DataRawHook.h` 加入工程，在 `application:didFinishLaunchingWithOptions` 最早处调用 `DataRawHookInstall()`，Unity 读取 Data/Raw 时自动解密。详见 [Data_Raw_Hook解密方案.md](../docs/Data_Raw_Hook解密方案.md)。
+- **Hook 自动解密**：`setup-raw` 会自动将 Hook 放入 Classes/、修改 pbxproj、在 UnityAppController.mm 注入调用，Unity 读取 Data/Raw 时自动解密。详见 [Data_Raw_Hook解密方案.md](../docs/Data_Raw_Hook解密方案.md)。
 
 ### 11. Xcode 集成
 

@@ -49,10 +49,15 @@ python3 tools/data_encrypt.py encrypt Data/Raw --key-out key.bin
 python3 tools/data_encrypt.py gen-hook --key $(cat key.bin.hex) -o DataRawHook.m
 ```
 
-### 3. 集成到 Xcode
+### 3. 集成到 Xcode（setup-raw 自动完成）
 
-- 将 `DataRawHook.m` 加入 Unity 导出的 Xcode 工程
-- 在 `UnityAppController.mm` 或 `main.m` 的 `application:didFinishLaunchingWithOptions:` 最早处调用 `DataRawHookInstall()`，确保在 Unity 初始化前完成 Hook
+执行 `setup-raw` 时会自动：
+
+1. 将 `DataRawHook.m`、`DataRawHook.h` 放入 `Classes/` 目录
+2. 修改 `project.pbxproj`，将文件加入 Xcode 工程 Classes 组及 Compile Sources
+3. 在 `UnityAppController.mm` 的 `didFinishLaunchingWithOptions` 开头注入 `DataRawHookInstall();` 和 `#import "DataRawHook.h"`
+
+若出现 `Undefined symbols: DataRawHookInstall()`：检查 `DataRawHook.m` 是否在 Compile Sources 中（自动添加失败时可手动添加）
 
 ### 4. 调用时机示例
 

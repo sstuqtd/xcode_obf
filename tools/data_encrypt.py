@@ -6,6 +6,7 @@ Data/Raw 文件加密/解密工具
 
 import argparse
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -32,6 +33,18 @@ def decrypt_file(input_path: Path, output_path: Path, key: bytes) -> None:
 
 def generate_key_hex(key: bytes) -> str:
     return ", ".join(f"0x{b:02X}" for b in key)
+
+
+_DATA_RAW_HOOK_HEADER = '''#import <Foundation/Foundation.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void DataRawHookInstall(void);
+#ifdef __cplusplus
+}
+#endif
+'''
 
 
 def generate_objc_loader(key: bytes, key_name: str = "kDataEncryptKey") -> str:
@@ -116,6 +129,115 @@ func decryptedDataFromBundle(relativePath: String) -> Data? {{
     return Data(encrypted.enumerated().map {{ $0.element ^ _dataEncryptKey[$0.offset % _dataEncryptKey.count] }})
 }}
 '''
+
+
+def _gen_uuid() -> str:
+    """生成 24 位 hex UUID（Xcode pbxproj 格式）"""
+    return secrets.token_hex(12).upper()
+
+
+def _add_data_raw_hook_to_pbxproj(project_root: Path, classes_dir: Path) -> bool:
+    """将 DataRawHook.m/.h 添加到 Xcode 工程，返回是否成功"""
+    xcodeproj = next(project_root.glob("*.xcodeproj"), None)
+    if not xcodeproj:
+        return False
+    pbx = xcodeproj / "project.pbxproj"
+    if not pbx.is_file():
+        return False
+
+    content = pbx.read_text(encoding="utf-8", errors="replace")
+    if "DataRawHook.m" in content:
+        return True  # 已添加
+
+    ref_m = _gen_uuid()
+    ref_h = _gen_uuid()
+    build_m = _gen_uuid()
+
+    # PBXFileReference
+    file_ref_m = f'{ref_m} /* DataRawHook.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DataRawHook.m; sourceTree = "<group>"; }};'
+    file_ref_h = f'{ref_h} /* DataRawHook.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DataRawHook.h; sourceTree = "<group>"; }};'
+
+    # PBXBuildFile
+    build_file = f'{build_m} /* DataRawHook.m in Sources */ = {{isa = PBXBuildFile; fileRef = {ref_m} /* DataRawHook.m */; }};'
+
+    # 插入 PBXFileReference
+    fr_match = re.search(r'(/\* Begin PBXFileReference section \*/\n)', content)
+    if fr_match:
+        content = content[: fr_match.end()] + f"\t\t{file_ref_m}\n\t\t{file_ref_h}\n" + content[fr_match.end() :]
+
+    # 插入 PBXBuildFile
+    bf_match = re.search(r'(/\* Begin PBXBuildFile section \*/\n)', content)
+    if bf_match:
+        content = content[: bf_match.end()] + f"\t\t{build_file}\n" + content[bf_match.end() :]
+
+    # 添加到 Classes 组的 children（匹配 path = Classes 或 name = Classes）
+    classes_pattern = r'([a-fA-F0-9]{24} /\* Classes \*\/ = \{\s+isa = PBXGroup;\s+children = \()(.*?)(\);)'
+    classes_alt = r'(\/\* Classes \*\/ = \{\s+isa = PBXGroup;\s+children = \()(.*?)(\);)'
+    new_refs = f"\n\t\t\t{ref_m} /* DataRawHook.m */,\n\t\t\t{ref_h} /* DataRawHook.h */,"
+
+    def add_to_classes(m):
+        prefix, children, suffix = m.groups()
+        return prefix + new_refs + children + suffix
+
+    content = re.sub(classes_pattern, add_to_classes, content, flags=re.DOTALL)
+    if "DataRawHook.m" not in content:
+        content = re.sub(classes_alt, add_to_classes, content, flags=re.DOTALL)
+
+    # 添加到 PBXSourcesBuildPhase 的 files（优先添加到含 UnityAppController 的 target）
+    sources_pattern = r'([a-fA-F0-9]{24} /\* Sources \*\/ = \{\s+isa = PBXSourcesBuildPhase;\s+buildActionMask = [^;]+;\s+files = \()(.*?)(\);)'
+    added = False
+
+    def add_to_sources(m):
+        nonlocal added
+        prefix, files, suffix = m.groups()
+        if added:
+            return m.group(0)
+        if "UnityAppController" in files or ".mm" in files or ".m " in files:
+            new_file = f"\n\t\t\t{build_m} /* DataRawHook.m in Sources */,"
+            added = True
+            return prefix + new_file + files + suffix
+        return m.group(0)
+
+    content = re.sub(sources_pattern, add_to_sources, content, flags=re.DOTALL)
+    if not added:
+        m = re.search(r'([a-fA-F0-9]{24} /\* Sources \*\/ = \{\s+isa = PBXSourcesBuildPhase;\s+buildActionMask = [^;]+;\s+files = \()(.*?)(\);)', content, re.DOTALL)
+        if m:
+            prefix, files, suffix = m.groups()
+            new_file = f"\n\t\t\t{build_m} /* DataRawHook.m in Sources */,"
+            content = content[: m.start()] + prefix + new_file + files + suffix + content[m.end() :]
+
+    pbx.write_text(content, encoding="utf-8")
+    return True
+
+
+def _inject_data_raw_hook_into_unity_app_controller(classes_dir: Path) -> bool:
+    """在 UnityAppController.mm 的 didFinishLaunchingWithOptions 中注入 DataRawHookInstall()"""
+    uac = classes_dir / "UnityAppController.mm"
+    if not uac.is_file():
+        return False
+
+    content = uac.read_text(encoding="utf-8", errors="replace")
+    if "DataRawHookInstall" in content:
+        return True  # 已注入
+
+    # 添加 #import（在第一个 #import 后，若无则在文件开头）
+    if '#import "DataRawHook.h"' not in content:
+        import_match = re.search(r'(#import\s+[^\n]+\n)', content)
+        if import_match:
+            content = content[: import_match.end()] + '#import "DataRawHook.h"\n' + content[import_match.end() :]
+        else:
+            content = '#import "DataRawHook.h"\n' + content
+
+    # 在 didFinishLaunchingWithOptions 方法体开头添加 DataRawHookInstall();
+    # 匹配 - (BOOL)application:...didFinishLaunchingWithOptions: 后的 { 及换行
+    pattern = r'(didFinishLaunchingWithOptions:\s*\([^)]*\)[^\n]*\n\s*\{)\s*\n'
+    replacement = r'\1\n\tDataRawHookInstall();\n'
+    new_content = re.sub(pattern, replacement, content, count=1)
+
+    if new_content != content:
+        uac.write_text(new_content, encoding="utf-8")
+        return True
+    return False
 
 
 def main():
@@ -228,16 +350,14 @@ def main():
         out_m = Path(args.output or "DataRawHook.m")
         out_m.write_text(code, encoding="utf-8")
         out_h = out_m.with_suffix(".h")
-        out_h.write_text(
-            "#import <Foundation/Foundation.h>\n\nvoid DataRawHookInstall(void);\n",
-            encoding="utf-8",
-        )
+        out_h.write_text(_DATA_RAW_HOOK_HEADER, encoding="utf-8")
         print(f"Hook 加载器已生成: {out_m}, {out_h}")
         print("集成: 在 application:didFinishLaunchingWithOptions 最早处调用 DataRawHookInstall();")
 
     elif args.cmd == "setup-raw":
         project_root = Path(args.project).resolve()
         data_raw = project_root / "Data" / "Raw"
+        classes_dir = project_root / "Classes"
         if not data_raw.is_dir():
             print(f"错误: 未找到 Data/Raw 目录: {data_raw}", file=sys.stderr)
             sys.exit(1)
@@ -256,18 +376,23 @@ def main():
         print(f"加密完成: Data/Raw 下 {count} 个文件")
         print(f"密钥已保存: {key_out}")
 
+        classes_dir.mkdir(parents=True, exist_ok=True)
         code = generate_objc_hook(key)
-        out_m = project_root / "DataRawHook.m"
-        out_h = project_root / "DataRawHook.h"
+        out_m = classes_dir / "DataRawHook.m"
+        out_h = classes_dir / "DataRawHook.h"
         out_m.write_text(code, encoding="utf-8")
-        out_h.write_text(
-            "#import <Foundation/Foundation.h>\n\nvoid DataRawHookInstall(void);\n",
-            encoding="utf-8",
-        )
+        out_h.write_text(_DATA_RAW_HOOK_HEADER, encoding="utf-8")
         print(f"Hook 加载器已生成: {out_m}, {out_h}")
-        print("")
-        print("下一步: 将 DataRawHook.m、DataRawHook.h 加入 Xcode，")
-        print("        在 application:didFinishLaunchingWithOptions 最早处调用 DataRawHookInstall();")
+
+        if _add_data_raw_hook_to_pbxproj(project_root, classes_dir):
+            print("已自动添加到 Xcode 工程 (Classes)")
+        else:
+            print("提示: 请手动将 DataRawHook.m、DataRawHook.h 加入 Xcode Classes 组")
+
+        if _inject_data_raw_hook_into_unity_app_controller(classes_dir):
+            print("已在 UnityAppController.mm 中注入 DataRawHookInstall()")
+        else:
+            print("提示: 请在 UnityAppController.mm 的 didFinishLaunchingWithOptions 中手动调用 DataRawHookInstall();")
 
     else:
         parser.print_help()
