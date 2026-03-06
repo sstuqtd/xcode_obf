@@ -173,11 +173,15 @@ python3 data_encrypt.py encrypt Data/Raw -o Data/Raw.enc --key-out key.bin
 # 生成 ObjC 加载器（需传入相同密钥，可用 key.bin.hex）
 python3 data_encrypt.py gen-loader --key $(cat key.bin.hex) -o DecryptedDataLoader.m
 
+# 生成 Hook 加载器（自动拦截 Data/Raw 读取，零侵入）
+python3 data_encrypt.py gen-hook --key $(cat key.bin.hex) -o DataRawHook.m
+
 # 解密（测试用）
 python3 data_encrypt.py decrypt Data/Raw.enc -o Data/Raw.dec --key <hex_key>
 ```
 
-运行时使用 `DecryptedDataFromBundle(@"path/to/file")` 加载解密后的 Data。
+- **手动加载**：运行时使用 `DecryptedDataFromBundle(@"path/to/file")` 加载解密后的 Data。
+- **Hook 自动解密**：将 `DataRawHook.m`、`DataRawHook.h` 加入工程，在 `application:didFinishLaunchingWithOptions` 最早处调用 `DataRawHookInstall()`，Unity 读取 Data/Raw 时自动解密。详见 [Data_Raw_Hook解密方案.md](../docs/Data_Raw_Hook解密方案.md)。
 
 ### 11. Xcode 集成
 

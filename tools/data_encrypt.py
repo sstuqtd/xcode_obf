@@ -61,6 +61,46 @@ NSData *DecryptedDataFromBundle(NSString *relativePath) {{
 '''
 
 
+def generate_objc_hook(key: bytes, key_name: str = "kDataEncryptKey") -> str:
+    """生成 ObjC Hook 解密加载器（替换 NSData dataWithContentsOfFile:，Data/Raw 路径先解密再返回）"""
+    key_hex = generate_key_hex(key)
+    return f'''
+#import <Foundation/Foundation.h>
+#import <objc/runtime.h>
+
+static unsigned char {key_name}[] = {{{key_hex}}};
+static const int {key_name}Len = sizeof({key_name});
+
+static NSData* (*original_dataWithContentsOfFile)(id, SEL, NSString*) = nil;
+
+static NSData* hooked_dataWithContentsOfFile(id self, SEL _cmd, NSString* path) {{
+    if (!path || path.length == 0)
+        return original_dataWithContentsOfFile ? original_dataWithContentsOfFile(self, _cmd, path) : nil;
+
+    NSString* p = [path stringByStandardizingPath];
+    if ([p containsString:@"Data/Raw"] || [p rangeOfString:@"/Raw/"].location != NSNotFound) {{
+        NSData* encrypted = original_dataWithContentsOfFile(self, _cmd, path);
+        if (!encrypted || encrypted.length == 0) return nil;
+        NSMutableData* decrypted = [NSMutableData dataWithLength:encrypted.length];
+        unsigned char* dst = decrypted.mutableBytes;
+        const unsigned char* src = encrypted.bytes;
+        for (NSUInteger i = 0; i < encrypted.length; i++)
+            dst[i] = src[i] ^ {key_name}[i % {key_name}Len];
+        return decrypted;
+    }}
+    return original_dataWithContentsOfFile(self, _cmd, path);
+}}
+
+void DataRawHookInstall(void) {{
+    if (original_dataWithContentsOfFile) return;
+    Method m = class_getClassMethod([NSData class], @selector(dataWithContentsOfFile:));
+    if (!m) return;
+    original_dataWithContentsOfFile = (void*)method_getImplementation(m);
+    method_setImplementation(m, (IMP)hooked_dataWithContentsOfFile);
+}}
+'''
+
+
 def generate_swift_loader(key: bytes) -> str:
     """生成 Swift 解密加载器"""
     key_hex = generate_key_hex(key)
@@ -103,6 +143,11 @@ def main():
     p_gen.add_argument("--key", required=True, help="16 进制密钥")
     p_gen.add_argument("-o", "--output", help="输出文件路径")
     p_gen.add_argument("--lang", choices=["objc", "swift"], default="objc")
+
+    # 生成 Hook 加载器（Method Swizzling 拦截 NSData dataWithContentsOfFile:）
+    p_hook = sub.add_parser("gen-hook", help="生成 Hook 解密加载器（自动拦截 Data/Raw 读取）")
+    p_hook.add_argument("--key", required=True, help="16 进制密钥")
+    p_hook.add_argument("-o", "--output", help="输出 .m 文件路径（默认 DataRawHook.m）")
 
     args = parser.parse_args()
 
@@ -167,6 +212,19 @@ def main():
         out_path = Path(args.output or f"DecryptedDataLoader{ext}")
         out_path.write_text(code, encoding="utf-8")
         print(f"加载器已生成: {out_path}")
+
+    elif args.cmd == "gen-hook":
+        key = parse_key(args.key)
+        code = generate_objc_hook(key)
+        out_m = Path(args.output or "DataRawHook.m")
+        out_m.write_text(code, encoding="utf-8")
+        out_h = out_m.with_suffix(".h")
+        out_h.write_text(
+            "#import <Foundation/Foundation.h>\n\nvoid DataRawHookInstall(void);\n",
+            encoding="utf-8",
+        )
+        print(f"Hook 加载器已生成: {out_m}, {out_h}")
+        print("集成: 在 application:didFinishLaunchingWithOptions 最早处调用 DataRawHookInstall();")
 
     else:
         parser.print_help()
